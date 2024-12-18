@@ -123,21 +123,33 @@ class UploadWorker(QtCore.QThread):
         await self.insert_posts_to_db_async(posts)
 
     async def insert_posts_to_db_async(self, posts):
-        status_label.setText("Данные получены. Выполняется загрузка...")
+        self.update_status_signal.emit("Данные получены. Выполняется загрузка...")
         total_posts = len(posts)
-        connection = sqlite3.connect('posts.db')
-        cursor = connection.cursor()
-        for index, onepost in enumerate(posts):
-            await asyncio.sleep(0.5)
-            cursor.execute("INSERT INTO posts(user_id, title, body) VALUES (?, ?, ?)",
-                           (onepost["userId"], onepost["title"], onepost["body"]))
-            connection.commit()
-            self.progress_updated.emit(index + 1)
 
-        connection.close()
-        status_label.setText("Загрузка данных завершена!")
+        try:
+            async with aiosqlite.connect('posts.db') as connection:
+                await connection.execute("PRAGMA foreign_keys=ON")
+
+                # Используем курсор как асинхронный контекстный менеджер
+                async with connection.cursor() as cursor:
+                    for index, onepost in enumerate(posts):
+                        await asyncio.sleep(0.5)  # Эмуляция задержки
+                        await cursor.execute(
+                            "INSERT INTO posts(user_id, title, body) VALUES (?, ?, ?)",
+                            (onepost["userId"], onepost["title"], onepost["body"])
+                        )
+                        await connection.commit()  # Подтверждение изменений
+
+                        self.progress_updated.emit(index + 1)
+
+        except Exception as e:
+            # Обработка ошибок и вывод сообщения на статус лейбл
+            self.update_status_signal.emit(f"Ошибка: {e}")
+            return  # Выходим из функции в случае ошибки
+
+        self.update_status_signal.emit("Загрузка данных завершена!")
         self.upload_finished.emit()
-        main_model.select()
+        main_model.select()  # Обновление модели данных
         
 class UpdateWorker(QtCore.QThread):
     update_finished = QtCore.pyqtSignal()
