@@ -4,6 +4,7 @@ import sys
 import requests
 import asyncio
 import sqlite3
+import asyosqlite
 
 # Подключение к БД
 def create_connection():
@@ -111,7 +112,10 @@ class UploadWorker(QtCore.QThread):
     upload_finished = QtCore.pyqtSignal()
 
     def run(self):
-        asyncio.run(self.upload_posts())
+        # Запускаем асинхронный цикл в этом потоке
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.upload_posts())
 
     async def upload_posts(self):
         status_label.setText("Запуск выполнения запроса...")
@@ -123,31 +127,21 @@ class UploadWorker(QtCore.QThread):
         await self.insert_posts_to_db_async(posts)
 
     async def insert_posts_to_db_async(self, posts):
-        self.update_status_signal.emit("Данные получены. Выполняется загрузка...")
+        status_label.setText("Данные получены. Выполняется загрузка...")
         total_posts = len(posts)
 
-        try:
-            async with aiosqlite.connect('posts.db') as connection:
-                await connection.execute("PRAGMA foreign_keys=ON")
+        async with aiosqlite.connect('posts.db') as connection:
+            await connection.execute("PRAGMA foreign_keys=ON")
+            for index, onepost in enumerate(posts):
+                await asyncio.sleep(0.5)  # Эмуляция задержки
+                await connection.execute(
+                    "INSERT INTO posts(user_id, title, body) VALUES (?, ?, ?)",
+                    (onepost["userId"], onepost["title"], onepost["body"])
+                )
+                await connection.commit()
+                self.progress_updated.emit(index + 1)
 
-                # Используем курсор как асинхронный контекстный менеджер
-                async with connection.cursor() as cursor:
-                    for index, onepost in enumerate(posts):
-                        await asyncio.sleep(0.5)  # Эмуляция задержки
-                        await cursor.execute(
-                            "INSERT INTO posts(user_id, title, body) VALUES (?, ?, ?)",
-                            (onepost["userId"], onepost["title"], onepost["body"])
-                        )
-                        await connection.commit()  # Подтверждение изменений
-
-                        self.progress_updated.emit(index + 1)
-
-        except Exception as e:
-            # Обработка ошибок и вывод сообщения на статус лейбл
-            self.update_status_signal.emit(f"Ошибка: {e}")
-            return  # Выходим из функции в случае ошибки
-
-        self.update_status_signal.emit("Загрузка данных завершена!")
+        status_label.setText("Загрузка данных завершена!")
         self.upload_finished.emit()
         main_model.select()  # Обновление модели данных
         
